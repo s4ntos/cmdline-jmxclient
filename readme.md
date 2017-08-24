@@ -24,7 +24,7 @@ Only java is required to compile
 
 This project is licensed under the MIT License - see the [LICENSE.md](LICENSE.md) file for details
 
-## Acknowledgments
+## Acknowledgement
 
 * Thank you to serba for having a repository of the original code: [https://github.com/serba/cmdline-jmxclient]
 
