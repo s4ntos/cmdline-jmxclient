@@ -31,9 +31,12 @@ import java.io.StringWriter;
 import java.text.FieldPosition;
 import java.text.ParseException;
 import java.text.SimpleDateFormat;
+import java.util.Arrays;
+import java.util.ArrayList;
 import java.util.Date;
 import java.util.HashMap;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.ConsoleHandler;
@@ -82,7 +85,7 @@ public class Client {
      * Usage string.
      */
     private static final String USAGE = "Usage: java -jar" +
-        " cmdline-jmxclient.jar USER:PASS HOST:PORT [BEAN] [COMMAND]\n" +
+        " cmdline-jmxclient.jar USER:PASS HOST:PORT [BEAN] [COMMAND,OPTIONS]\n" +
         "Options:\n" +
         " USER:PASS Username and password. Required. If none, pass '-'.\n" +
         "           E.g. 'controlRole:secret'\n" +
@@ -110,6 +113,11 @@ public class Client {
         "           Pass 'Attributes' to get listing of all attributes and " +
         "and their\n" +
         "           values.\n" +
+        " OPTIONS can be used after the COMMMAND can be used to get status of the attributes.\n" +
+        "           COMMAND,VALUE > Compares return with VALUE\n" +
+        "           COMAND,WARNING,CRITICAL > OK if lower than both, WARNING if lower than 2 option, CRITICAL otherwise\n" +
+        "           COMMAND,ATRIBUTE,WARNING,CRITICAL > TBI optjetive is to compare 2 atributes in %\n" +
+        "           COMMAND, CRITICALL,WARNINGL,WARNINGH,CRITICALH > In the zone :)\n" +
         "Requirements:\n" +
         " JDK1.5.0. If connecting to a SUN 1.5.0 JDK JMX Agent, remote side" +
         " must be\n" +
@@ -129,6 +137,14 @@ public class Client {
         "     % java -jar cmdline-jmxclient-X.X.jar - localhost:8081 \\\n" +
         "         org.archive.crawler:name=Heritrix,type=Service \\\n" +
         "         schedule=http://www.archive.org\n" +
+        " Compares Heritrix MBean, Uptime atribute to 12345:\n" +
+        "     % java -jar cmdline-jmxclient-X.X.jar - localhost:8081 \\\n" +
+        "         org.archive.crawler:name=Heritrix,type=Service \\\n" +
+        "         Uptime,12345\n" +
+        " Check if Heritrix MBean, Uptime atribute is lower than 12345 and 123456:\n" +
+        "     % java -jar cmdline-jmxclient-X.X.jar - localhost:8081 \\\n" +
+        "         org.archive.crawler:name=Heritrix,type=Service \\\n" +
+        "         Uptime,12345,123456\n" +
         " To set set logging level to FINE on a password protected JVM:\n" +
         "     % java -jar cmdline-jmxclient-X.X.jar controlRole:secret" +
         " localhost:8081 \\\n" +
@@ -156,7 +172,7 @@ public class Client {
                 h.setFormatter(client.new OneLineSimpleLogger());
             }
         }
-        client.execute(args);
+        System.exit(client.execute(args));
 	}
     
     protected static void usage() {
@@ -233,24 +249,36 @@ public class Client {
      * @param args Cmdline args.
      * @throws Exception
      */
-    protected void execute(final String [] args)
+    protected int execute(final String [] args)
     throws Exception {
         // Process command-line.
         if (args.length == 0 || args.length == 1) {
             usage();
         }
+        int returnCode = 3;
+	int finalReturnCode = 0;	
         String userpass = args[0];
         String hostport = args[1];
         String beanname = null;
         String [] command = null;
+        List<String> commandList = new ArrayList();
+	HashMap<String, String[]> commandParam = new HashMap<String, String[]>();
         if (args.length > 2) {
             beanname = args[2];
         }
         if (args.length > 3) {
-            command = new String [args.length - 3];
+            //command = new String [args.length - 3];
             for (int i = 3; i < args.length; i++) {
-                command[i - 3] = args[i];
+		String[] argList = args[i].split(",");
+                //command[i - 3] = argList[0];
+                commandList.add(argList[0]);
+		commandParam.put(argList[0],Arrays.copyOfRange(argList,1,argList.length));
+		if ( argList.length == 4) {
+                     commandList.add(argList[1]);
+		     commandParam.put(argList[1],new String[0] );
+		}
             }
+	    command = (String[])commandList.toArray(new String[commandList.size()]);
         }
         String [] loginPassword = parseUserpass(userpass);
         Object [] result = execute(hostport,
@@ -258,17 +286,73 @@ public class Client {
             ((loginPassword == null)? null: loginPassword[1]), beanname,
             command);
         // Print out results on stdout. Only log if a result.
+        StringBuffer bufferCheck = new StringBuffer();
+        StringBuffer bufferPerf = new StringBuffer();
         if (result != null) {
             for (int i = 0; i < result.length; i++) {
                 if (result[i] != null && result[i].toString().length() > 0) {
                     if (command != null) {
-                        logger.info(command[i] + ": " + result[i]);
+                        //logger.info(command[i] + ": " + result[i]);
+                        String [] param = commandParam.get(command[i]);
+			returnCode = 2;
+			int threshold;
+			try {
+			threshold = Integer.parseInt(result[i].toString());
+        		} catch (NumberFormatException e) { threshold = 0; }
+			int criticalL = 0;
+			int warningL = 0;
+			int warningH = 0;
+			int criticalH = 0;
+                        bufferPerf.append(command[i] + "=" + result[i] + " ");
+                        switch (param.length) {
+				case 0: returnCode = 0;
+					break; // Requires Change to implementh case 3
+				case 1: if ( param[0].equals(result[i].toString()) ) returnCode = 0;
+					break;
+				case 2: try { warningH = Integer.parseInt(param[0]);
+					criticalH = Integer.parseInt(param[1]);
+					if ( threshold < criticalH )  returnCode = 1; 
+					if ( threshold < warningH ) returnCode = 0;
+        				} catch (NumberFormatException e) { System.out.println("Problem with parameters"); returnCode = 3; }
+					break;
+				case 3: System.out.println("To be Implemented");
+					break;
+				case 4: try { criticalL = Integer.parseInt(param[0]);
+					warningL = Integer.parseInt(param[1]);
+					warningH = Integer.parseInt(param[2]);
+					criticalH = Integer.parseInt(param[3]);
+					if ( threshold < criticalH && threshold > criticalL ) returnCode = 1;
+					if ( threshold < warningH && threshold > warningL) returnCode = 0;
+        				} catch (NumberFormatException e) { System.out.println("Problem with parameters"); returnCode = 3; }
+					break;
+				default : System.out.println("Invalid Entry");
+					break;
+			}
+			switch (returnCode) {
+			     case 0: command[i] += ": OK ";
+				     break;
+			     case 1: command[i] += ": WARNING ";
+				     break;
+			     case 2: command[i] += ": CRITICAL ";
+				     break;
+			     default : command[i] += ": UNKNOWN ";
+				     break;
+			}
+                        bufferCheck.append(command[i]);
+			if ( returnCode != 0 ) 
+			{ 
+                            bufferCheck.append("failed parameters " + Arrays.toString(param) + " "); 
+			    finalReturnCode = ( returnCode > finalReturnCode ) ? returnCode : finalReturnCode; 
+			}
                     } else {
-                        logger.info("\n" + result[i].toString());
+                        ////logger.info("\n" + result[i].toString());
+                        System.out.println("\n" + result[i].toString());
                     }
                 }
             }
+	    System.out.println(bufferCheck.toString() + "|" + bufferPerf.toString());
         }
+	return finalReturnCode;
     }
     
     protected Object [] execute(final String hostport, final String login,
